@@ -55,6 +55,7 @@ decrypt() {
 
 update() {
   # TODO
+  echo "It's on the TODO list!"
 }
 
 
