@@ -1,0 +1,143 @@
+#!/usr/bin/env bash
+
+checkOpenSSL() {
+  if  ! command -v openssl &>/dev/null; then
+    echo "Error: This script requires openssl to be installed" >&2
+    return 1
+  else
+    return 0
+  fi
+}
+
+checkInternet() {
+  httpGet github.com > /dev/null 2>&1 || { echo "Error: no active internet connection" >&2; return 1; } # query github with a get request
+}
+
+## This function determines which http get tool the system has installed and returns an error if there isnt one (prefers curl and wget)
+getConfiguredClient() {
+  if  command -v curl &>/dev/null; then
+    configuredClient="curl"
+  elif command -v wget &>/dev/null; then
+    configuredClient="wget"
+  elif command -v http &>/dev/null; then
+    configuredClient="httpie"
+  elif command -v fetch &>/dev/null; then
+    configuredClient="fetch"
+  else
+    echo "Error: This script requires one of the following to be installed: curl, wget, httpie or fetch" >&2
+    return 1
+  fi
+}
+
+## Allows to call the users configured client without if statements everywhere
+httpGet() {
+  case "$configuredClient" in
+    curl)  curl -A curl -s "$@" ;;
+    wget)  wget -qO- "$@" ;;
+    httpie) http -b GET "$@" ;;
+    fetch) fetch -q "$@" ;;
+  esac
+}
+
+## uses openssl aes 256 cbc encryption to encrypt file salting it with password designated by user
+encrypt() {
+  echo "Encrypting $1..."
+  openssl enc -aes-256-cbc -salt -a -in $1 -out $2 || { echo "File not found"; return 1; }
+  echo "Successfully encrypted"
+}
+
+## uses openssl aes 256 cbc decryption to decrypt file
+decrypt() {
+  echo "Decrypting $1..."
+  openssl enc -aes-256-cbc -d -a -in $1 -out $2 || { echo "File not found"; return 1; }
+  echo "Successfully decrypted"
+}
+
+update() {
+  # TODO
+}
+
+
+usage() {
+  cat <<EOF
+Crypt
+Description: A wrapper around openssl that facilitates encrypting and decrypting files.
+Usage: crypt [flag] [inputFile] [outputFile]
+  -e  Encrypt the inputFile and store it in the outputFile
+  -d  Decrypt the inputFile and store it in the outputFile
+  -u  Auto-Update
+  -h  Show the help
+  -v  Get the tool version
+Examples:
+  crypt -e mySecretFile.txt myEncryptedFile.jpg (obfuscate filetype so default program is incorrect)
+  crypt -d myEncryptedFile.jpg thisIsNowDecrypted.txt (obfuscate filetype back so now default program is correct)
+EOF
+}
+
+checkOpenSSL || exit 1
+
+while getopts "huve:d:" opt; do ## alows for using options in bash
+  case $opt in
+    e)  ## when trying to encrypt run this
+        if [[ $state != "decrypt" ]]; then
+          state="encrypt"
+        else
+          echo "Error: the -d and -e options are mutally exclusive" >&2
+          exit 1
+        fi
+        if [[ $# -ne 3 ]]; then
+          echo "Option -e needs and only accepts two arguments [file to encrypt] [output file]" >&2
+          exit 1
+        fi
+        ;;
+    \?) echo "Invalid option: -$OPTARG" >&2
+        exit 1
+        ;;
+    d)  ## when trying to decrypt run this
+        if [[ $state != "encrypt" ]]; then
+          state="decrypt"
+        else
+          echo "Error: the -e and -d options are mutally exclusive" >&2
+          exit 1
+        fi
+        if [[ $# -ne 3 ]]; then
+          echo "Option -d needs and only accepts two arguments [file to decrypt] [output file]" >&2
+          exit 1
+        fi
+        ;;
+    u)  getConfiguredClient || exit 1
+        checkInternet || exit 1
+        update
+        exit 0
+        ;;
+    h)  usage
+        exit 0
+        ;;
+    v)  echo "Version $currentVersion"
+        exit 0
+        ;;
+    :)  ## will run when no arguments are provided to to e or d options
+        echo "Option -$OPTARG requires an argument." >&2
+        exit 1
+        ;;
+  esac
+done
+
+if [[ $# == 0 ]]; then
+  usage
+  exit 0
+elif [[ $1 == "update" ]]; then
+  getConfiguredClient || exit 1
+  checkInternet || exit 1
+  update || exit 1
+  exit 0
+elif [[ $1 == "help" ]]; then
+  usage
+  exit 0
+elif [[ $state == "encrypt" ]]; then
+  encrypt $2 $3 || exit 1
+  exit 0
+elif [[ $state == "decrypt" ]]; then
+  decrypt $2 $3 || exit 1
+  exit 0
+fi
