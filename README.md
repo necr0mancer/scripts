@@ -4,6 +4,6 @@
 **transfer** - quickly transfer files from command line  
 **qrgen** - generates qr code for a string of text  
 **update** - small update function that can be put into any script  
-**pwdsh** - generate and manage passwords in an encrypted file using gpg symmetric encryption  
+**pwsafe** - generate and manage passwords in an encrypted file using gpg symmetric encryption  
 
 
