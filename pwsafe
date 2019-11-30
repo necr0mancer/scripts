@@ -8,138 +8,121 @@ umask 077
 
 filter="$(command -v grep) -v -E"
 gpg="$(command -v gpg || command -v gpg2)"
-safe="${PWDSH_SAFE:=pw.safe}"
-
+#gpgexists="$(command -v gpg || command -v gpg2)"
+safefile=${PWSAFE:=pw.safe}
 
 fail () {
-  # Print an error message and exit.
-
-  printf "\n\n"
-  tput setaf 1 1 1 ; echo "Error: ${1}" ; tput sgr0
-  exit 1
+	# print an error message on fail and exit the program.
+	printf "\n\n"
+	tput setaf 1 1 1 ; echo "Error: ${1}" ; tput sgr0
+	exit 1  
 }
 
+get_pass() {
+	# prompt for password
+	password=""
+	prompt="${1}"
 
-get_pass () {
-  # Prompt for a password.
-
-  password=""
-  prompt="${1}"
-
-  while IFS= read -p "${prompt}" -r -s -n 1 char ; do
-    if [[ ${char} == $'\0' ]] ; then
-      break
-    elif [[ ${char} == $'\177' ]] ; then
-      if [[ -z "${password}" ]] ; then
-        prompt=""
-      else
-        prompt=$'\b \b'
-        password="${password%?}"
-      fi
-    else
-      prompt="*"
-      password+="${char}"
-    fi
-  done
+	while IFS= read -p "${prompt}" -r -s -n 1 char ; do
+		if [[ ${char} == $'\0' ]] ; then
+			break
+		elif [[ ${char} == $'\177' ]] ; then
+			if [[ -z "${password}" ]] ; then
+				prompt=""
+			else
+				prompt=$'\b \b'
+				password="${password%?}"
+			fi
+		else
+			prompt="*"
+			password+="${char}"
+		fi
+	done  
 }
 
-
-decrypt () {
-  # Decrypt with a password.
-
-  echo "${1}" | ${gpg} --armor --batch --no-symkey-cache \
-    --decrypt --passphrase-fd 0 "${2}" 2>/dev/null
+decrypt() {
+	# decrypt with a known password
+	echo "${1}" | ${gpg} --armor --batch --decrypt --passphrase-fd 0 "${2}" 2>/dev/null
+  
 }
 
-
-encrypt () {
-  # Encrypt with a password.
-
-  ${gpg} --armor --batch \
-    --symmetric --yes --passphrase-fd 3 --no-symkey-cache \
-    --output "${2}" "${3}" 3< <(echo "${1}")
+encrypt() {
+	# encrypt with a password
+	${gpg} --armor --batch --symmetric --yes --passphrase-fd 3 --output "${2}" "${3}" 3< <(echo "${1}")
+  
 }
 
+read_pass() {
+	# read a password from the safe file
+	if [[ ! -s ${safefile} ]] ; then fail "${safefile} not found" ; fi
 
-read_pass () {
-  # Read a password from safe.
+	if [[ -z "${2+x}" ]] ; then read -r -p "
+	Username / Service (leave blank to list all): " username
+	else
+		username="${2}"
+	fi
 
-  if [[ ! -s ${safe} ]] ; then fail "${safe} not found" ; fi
+	if [[ -z "${username}" || "${username}" == "all" ]] ; then username="" ; fi
 
-  if [[ -z "${2+x}" ]] ; then read -r -p "
-  Username (Enter for all): " username
-  else
-    username="${2}"
-  fi
+	while [[ -z "${password}" ]] ; do get_pass "
+	Password to unlock ${safefile}: " ; done
+	printf "\n\n"
 
-  if [[ -z "${username}" || "${username}" == "all" ]] ; then username="" ; fi
-
-  while [[ -z "${password}" ]] ; do get_pass "
-  Password to unlock ${safe}: " ; done
-  printf "\n\n"
-
-  decrypt "${password}" ${safe} | grep -F " ${username}" \
-    || fail "Decryption failed"
+	decrypt "${password}" ${safefile} | grep -F " ${username}" || fail "Decryption failed"
 }
 
+gen_pass() {
+	# generate a password
+	len=16
+	max=50
 
-gen_pass () {
-  # Generate a password.
+	if [[ -z "${3+x}" ]] ; then read -p "
+	Password length (default: ${len}, max: ${max}): " length
+	else
+		length="${3}"
+	fi
 
-  len=16
-  max=80
+	if [[ ${length} =~ ^[0-9]+$ ]] ; then len=${length} ; fi
 
-  if [[ -z "${3+x}" ]] ; then read -p "
-
-  Password length (default: ${len}, max: ${max}): " length
-  else
-    length="${3}"
-  fi
-
-  if [[ ${length} =~ ^[0-9]+$ ]] ; then len=${length} ; fi
-
-  # base64: 4 characters for every 3 bytes
-  ${gpg} --armor --gen-random 0 "$((${max} * 3/4))" | cut -c -"${len}"
- }
-
-
-write_pass () {
-  # Write a password in safe.
-
-  # If no password (delete action), clear the entry by writing an empty line.
-  if [[ -z "${userpass+x}" ]] ; then
-    entry=" "
-  else
-    entry="${userpass} ${username}"
-  fi
-
-  get_pass "
-  Password to unlock ${safe}: " ; echo
-
-  # If safe exists, decrypt it and filter out username, or bail on error.
-  # If successful, append entry, or blank line.
-  # Filter blank lines and previous timestamp, append fresh timestamp.
-  # Finally, encrypt it all to a new safe file, or fail.
-  # If successful, update to new safe file.
-  ( if [[ -f "${safe}" ]] ; then
-      decrypt "${password}" ${safe} | \
-      ${filter} " ${username}$" || return
-    fi ; \
-    echo "${entry}") | \
-    (${filter} "^[[:space:]]*$|^mtime:[[:digit:]]+$";echo mtime:$(date +%s)) | \
-    encrypt "${password}" ${safe}.new - || fail "Write to safe failed"
-    mv ${safe}{.new,}
+	# base64: 4 characters for every 3 bytes
+	${gpg} --armor --gen-random 0 "$((${max} * 3/4))" | cut -c -"${len}"
 }
 
+write_pass() {
+	# write a password to the safe file
+	# if no password (when deleting), clear entry and replace with an empty line
+	if [[ -z "${userpass+x}" ]] ; then
+		entry=" "
+	else
+		entry="${username} ${userpass}"
+	fi
 
-new_entry () {
-  # Prompt for new username and/or password.
+	get_pass "
+	Password to unlock ${safefile} file: " ; echo
 
-  if [[ -z "${2+x}" ]] ; then read -r -p "
-  Username: " username
-  else
-    username="${2}"
-  fi
+	# if safe file exists, decrypt it and filter out username/pass, or bail with error
+	# if successful, append entry or blank line.
+	# filter blank lines and previous timestamp, append fresh timestamp
+	# finally, encrypt it all to a new safe file, or fail (oops)
+	# if successful, update to new safe file.
+	( if [[ -f "${safefile}" ]] ; then
+		decrypt "${password}" ${safefile} | \
+		${filter} " ${username}$" || return
+	fi ; \
+	echo "${entry}") | \
+	(${filter} "^[[:space:]]*$|^mtime:[[:digit:]]+$";echo mtime:$(date +%s)) | \
+	encrypt "${password}" ${safefile}.new - || fail "Write to safe failed"
+	mv ${safefile}{.new,}
+  
+}
+
+new_entry() {
+	# prompt for new username and/or password
+	if [[ -z "${2+x}" ]] ; then read -r -p "
+		Username: " username
+		else
+			username="${2}"
+		fi
 
   if [[ -z "${3+x}" ]] ; then get_pass "
   Password for \"${username}\" (Enter to generate): "
@@ -154,60 +137,29 @@ new_entry () {
   fi
 }
 
-print_help () {
-  # Print help text.
-
-  echo "
-  pwsafe is a shell script to manage passwords with GnuPG symmetric encryption.
-
-  pwsafe can be used interactively as or with one of the following options:
-
-    * 'r' to read a password
-    * 'w' to write a password
-    * 'd' to delete a password
-    * 'h' to print this help text
-
-  A username, password length and 'q' options can also be used.
-
-  Examples:
-
-    * Read all passwords:
-
-      ./pwsafe r all
-
-    * Write a password for 'github':
-
-      ./pwsafe w github
-
-    * Generate a 50 character password for 'github' and write:
-
-      ./pwsafe w github 50
-
-    * Generate a password and write without displaying it:
-
-      ./pwsafe w github 50 q
-
-    * Delete password for 'mail':
-
-      ./pwsafe d mail
-
-  A password cannot be supplied as an argument, nor is used as one in the script, to prevent it from appearing in process listing or logs."
+print_help() {
+	# print help text with example options and uses
+	echo "
+		pwsafe is a shell script to manage password with GnuPG symmetric encryption.
+		
+		**still need to update this**
+	"
+  
 }
 
-
-if [[ -z ${gpg} && ! -x ${gpg} ]] ; then fail "GnuPG is not available" ; fi
+if [[ -z ${gpg} && ! -x ${gpg} ]] ; then fail "GnuPG is not installed, or is not configured properly." ; fi
 
 password=""
 
 action=""
 if [[ -n "${1+x}" ]] ; then
-  action="${1}"
-fi 
+	action="${1}"
+fi
 
 while [[ -z "${action}" ]] ;
-  do read -n 1 -p "
-  Read, Write, or Delete password (or Help): " action
-  printf "\n"
+	do read -n 1 -p "
+	Read, Write or Delete password (or Help): " action
+	printf "\n"
 done
 
 if [[ "${action}" =~ ^([hH])$ ]] ; then
